@@ -1,11 +1,10 @@
 # -----------------------------------------------------------------------------
 # 「灵感方舟」施工总纲领 (Plot Ark Cloud Build Master Plan)
-# 版本: 1.0 - The Final Word
+# 版本: 2.0 - 最终授权版 (The Final Authorization)
 # 描述: 这份文件拥有最高权限，将指导Cloud Build完成所有构建和部署工作。
 # -----------------------------------------------------------------------------
 steps:
   # 第1步：构建Docker镜像
-  # 我们告诉它，使用我们的Dockerfile，并给构建好的应用打上标签
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'gcr.io/$PROJECT_ID/plot-ark-backend:$COMMIT_SHA', '.']
 
@@ -13,7 +12,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/plot-ark-backend:$COMMIT_SHA']
 
-  # 第3步：将这个全新的、完美的镜像部署到Cloud Run
+  # 第3步：将这个全新的、完美的镜像部署到Cloud Run (增加了密钥授权！)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -27,6 +26,10 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated' # <-- 允许公开访问
+      # --- 这就是我们最终的魔法！---
+      # 告诉Cloud Run，去Secret Manager里找到名叫'GOOGLE_API_KEY'的密钥，
+      # 用它的最新版本(latest)，创建一个同名的环境变量。
+      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest'
 
 # 我们将构建好的镜像信息保存下来
 images:
