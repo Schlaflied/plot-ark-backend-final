@@ -1,0 +1,5 @@
+Flask==2.2.2
+google-generativeai
+python-dotenv
+Flask-Cors
+gunicorn

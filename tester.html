@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>灵感方舟 - 最终测试器</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f0f2f5; color: #333; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+        .container { width: 100%; max-width: 800px; background-color: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
+        h1 { text-align: center; color: #007bff; margin-bottom: 25px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: 600; margin-bottom: 8px; }
+        textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; box-sizing: border-box; min-height: 100px; resize: vertical; }
+        button { width: 100%; padding: 15px; background-color: #007bff; color: white; border: none; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; transition: background-color 0.2s; }
+        button:disabled { background-color: #a0cfff; cursor: not-allowed; }
+        #result-container { margin-top: 30px; padding: 20px; background-color: #f7f7f7; border: 1px solid #e0e0e0; border-radius: 8px; white-space: pre-wrap; font-family: 'Courier New', Courier, monospace; min-height: 100px; }
+        .spinner { border: 4px solid rgba(0,0,0,0.1); width: 24px; height: 24px; border-radius: 50%; border-left-color: #fff; animation: spin 1s ease infinite; display: inline-block; vertical-align: middle; margin-left: 10px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>灵感方舟 - 最终测试器 🚀</h1>
+        
+        <div class="form-group">
+            <label for="character1">角色1 (Character 1)</label>
+            <textarea id="character1">Ash Lynx, a charismatic youth with a complex background from New York, haunted by a traumatic past.</textarea>
+        </div>
+        
+        <div class="form-group">
+            <label for="character2">角色2 (Character 2)</label>
+            <textarea id="character2">Eiji Okumura, a kind-hearted Japanese photographer who becomes Ash's unwavering source of light.</textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="plot_prompt">核心梗/场景 (Plot Prompt)</label>
+            <textarea id="plot_prompt">What if they met again years later in modern Japan, and Ash has lost his memories?</textarea>
+        </div>
+        
+        <button id="generate-button">生成灵感 (Generate)</button>
+
+        <div id="result-container">（AI生成的大纲将显示在这里）</div>
+    </div>
+
+    <script>
+        const generateButton = document.getElementById('generate-button');
+        const resultContainer = document.getElementById('result-container');
+
+        generateButton.addEventListener('click', async function() {
+            const originalButtonText = generateButton.innerHTML;
+            generateButton.innerHTML = '生成中...<div class="spinner"></div>';
+            generateButton.disabled = true;
+            resultContainer.textContent = '正在呼叫AI，请稍候...';
+
+            const data = {
+                character1: document.getElementById('character1').value,
+                character2: document.getElementById('character2').value,
+                plot_prompt: document.getElementById('plot_prompt').value
+            };
+
+            try {
+                const response = await fetch('http://127.0.0.1:5000/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data),
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    resultContainer.textContent = result.outline;
+                } else {
+                    resultContainer.textContent = `发生错误: ${result.error}\n\n${result.reason || ''}`;
+                }
+
+            } catch (error) {
+                resultContainer.textContent = '发生连接错误: ' + error.message;
+            } finally {
+                generateButton.innerHTML = originalButtonText;
+                generateButton.disabled = false;
+            }
+        });
+    </script>
+
+</body>
+</html>
