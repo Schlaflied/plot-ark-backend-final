@@ -1,0 +1,12 @@
+# -----------------------------------------------------------------------------
+# 「灵感方舟」后端依赖文件 (Plot Ark Backend Dependencies)
+# 版本: 2.0 - Version Pinned for Cloud Run Stability
+# 描述: 明确指定了Flask和Werkzeug的版本，以解决部署时的ImportError。
+# -----------------------------------------------------------------------------
+
+Flask==2.3.3
+Werkzeug==2.3.2
+gunicorn
+python-dotenv
+google-generativeai
+Flask-Cors
