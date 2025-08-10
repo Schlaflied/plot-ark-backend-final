@@ -1,5 +1,9 @@
-Flask==2.2.2
-google-generativeai
-python-dotenv
-Flask-Cors
+Flask==2.3.3
+Werkzeug==2.3.7
 gunicorn
+python-dotenv
+google-generativeai
+Flask-Cors
+Flask-SQLAlchemy
+psycopg2-binary
+PyJWT
