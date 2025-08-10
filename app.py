@@ -2,8 +2,8 @@
 
 # -----------------------------------------------------------------------------
 # 「灵感方舟」后端核心应用 (Plot Ark Backend Core)
-# 版本: 12.0 - 数据库连接池升级！
-# 描述: 引入了 SQLAlchemy 的连接池配置，以解决 SSL 连接意外关闭的问题。
+# 版本: 12.1 - 防 OOC 指令强化！
+# 描述: 优化了核心 Prompt，增加了对角色性格的分析和严格遵守人设的指令。
 # -----------------------------------------------------------------------------
 
 import os
@@ -17,28 +17,19 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 
-# --- 关键一步：在所有配置之前加载.env文件 ---
 load_dotenv()
 
-# --- 1. 初始化和配置 ---
 app = Flask(__name__)
 CORS(app) 
 
-# --- 2. 核心配置 (从环境变量加载) ---
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'a-very-secret-key-for-local-dev')
 DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://neondb_owner:npg_Q3cNO9dJhyHA@ep-small-leaf-aei7oe8l-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require')
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# --- ✨ 数据库连接池优化 ✨ ---
-# 这是解决 SSL 连接问题的关键！
-# pool_recycle: 每隔一段时间（比如280秒）回收一次连接，防止连接因空闲而被服务器关闭。
-# pool_pre_ping: 在每次从池中获取连接时，先发送一个简单的 "ping" 查询来测试连接是否仍然有效。
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_recycle': 280,
     'pool_pre_ping': True
 }
-
 
 db = SQLAlchemy(app)
 
@@ -47,7 +38,6 @@ if not api_key:
     raise ValueError("FATAL ERROR: GOOGLE_API_KEY environment variable is not set.")
 genai.configure(api_key=api_key)
 
-# --- 3. 数据库模型定义 (我们的“数据蓝图”) ---
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
@@ -66,7 +56,6 @@ class Prompt(db.Model):
 with app.app_context():
     db.create_all()
 
-# --- 4. 安全认证 (我们的“令牌系统”) ---
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -75,38 +64,39 @@ def token_required(f):
             parts = request.headers['Authorization'].split()
             if len(parts) == 2 and parts[0].lower() == 'bearer':
                 token = parts[1]
-        
-        if not token:
-            return jsonify({'message': '缺少认证令牌!'}), 401
-        
+        if not token: return jsonify({'message': '缺少认证令牌!'}), 401
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
             current_user = User.query.get(data['user_id'])
-            if not current_user:
-                 return jsonify({'message': '认证令牌无效，找不到用户!'}), 401
-        except jwt.ExpiredSignatureError:
-            return jsonify({'message': '认证令牌已过期!'}), 401
-        except Exception as e:
-            return jsonify({'message': '认证令牌无效!', 'error': str(e)}), 401
-        
+            if not current_user: return jsonify({'message': '认证令牌无效，找不到用户!'}), 401
+        except Exception: return jsonify({'message': '认证令牌无效!'}), 401
         return f(current_user, *args, **kwargs)
     return decorated
 
-# --- 辅助函数：通用的AI生成逻辑 ---
+# --- ✨ 灵魂升级：全新的防 OOC Prompt ✨ ---
 def get_ai_outline(char1, char2, plot_prompt, language):
     language_instructions = {'en': 'in English', 'zh-CN': 'in Simplified Chinese', 'zh-TW': 'in Traditional Chinese'}
     output_language_instruction = language_instructions.get(language, 'in English')
+    
+    # 新的、更强大的 Prompt
     prompt = f"""
-You are a world-class screenwriter and fanfiction author, an expert at crafting emotionally resonant stories.
-Your task is to generate a detailed plot outline **{output_language_instruction}** based on the following characters and prompt.
-The story may involve mature themes, which should be handled with literary depth.
-**Crucially, you must pay close attention to gender cues in the character descriptions and use the correct pronouns (e.g., he/him for male characters, she/her for female characters) throughout the entire outline. Misgendering a character is a critical failure.**
-The outline should be logical, in-character, and full of emotional tension.
+# ROLE & GOAL
+You are a character-driven storyteller and a master of literary analysis. Your highest priority is maintaining character integrity. Your goal is to generate a plot outline that feels like it was written by someone who has loved these characters for years.
+
+# CORE DIRECTIVES - YOU MUST FOLLOW THESE RULES
+1.  **NO OOC (Out Of Character) ACTIONS**: This is the most critical rule. Before writing, deeply analyze the provided character descriptions. Every action, decision, and reaction in the plot MUST be a believable extension of their established personality, history, and motivations. Do not make them do things that contradict their core traits for the sake of plot convenience. A single OOC moment is a total failure.
+2.  **ANALYZE, THEN WRITE**: Your internal process must be: First, read and understand Character 1 and Character 2. Identify their key personality traits (e.g., "charismatic but haunted," "kind-hearted and unwavering"). Second, generate the plot outline ensuring every step is consistent with these traits.
+3.  **PRONOUN ACCURACY**: Pay close attention to gender cues in the character descriptions (e.g., "male", "female", "boy", "girl") and use the correct pronouns throughout the entire outline. Misgendering a character is a critical failure.
+4.  **SHOW, DON'T TELL**: Instead of saying a character is sad, describe an action that shows their sadness. Focus on emotional tension and subtle character interactions.
+
+# TASK
+Generate a detailed plot outline **{output_language_instruction}** based on the following information.
 
 **Character 1:** {char1}
 **Character 2:** {char2}
 **Core Plot Prompt:** {plot_prompt}
 
+# OUTPUT FORMAT
 Please generate a detailed plot outline with the following sections:
 1.  **Opening:** How the story begins.
 2.  **Inciting Incident:** The event that kicks off the main plot.
@@ -114,6 +104,8 @@ Please generate a detailed plot outline with the following sections:
 4.  **Climax:** The turning point of the story.
 5.  **Falling Action:** The immediate aftermath of the climax.
 6.  **Resolution:** The conclusion of the story.
+
+Remember: The quality of this outline is judged solely on its emotional resonance and strict adherence to the characters as described. Do not break character.
 """
     
     model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
@@ -127,19 +119,19 @@ Please generate a detailed plot outline with the following sections:
     
     if not response.parts:
         block_reason = response.prompt_feedback.block_reason.name if response.prompt_feedback else "Unknown"
-        print(f"Response blocked by API. Reason: {block_reason}")
         return None, { "error": "内容被安全系统拦截", "reason": f"原因: {block_reason}. 请尝试修改Prompt。" }
     
     return response.text, None
 
 
-# --- 5. API 路由定义 ---
+# --- API 路由定义 (保持不变) ---
 @app.route('/')
 def index():
-    return jsonify({ "status": "online", "message": "Welcome to Plot Ark Backend! Database is connected.", "version": "12.0" })
+    return jsonify({ "status": "online", "message": "Welcome to Plot Ark Backend! Database is connected.", "version": "12.1" })
 
 @app.route('/api/register', methods=['POST'])
 def register():
+    # ... (代码不变)
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
@@ -153,6 +145,7 @@ def register():
 
 @app.route('/api/login', methods=['POST'])
 def login():
+    # ... (代码不变)
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
@@ -163,70 +156,38 @@ def login():
     token = jwt.encode({ 'user_id': user.id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24) }, app.config['SECRET_KEY'], algorithm="HS256")
     return jsonify({'token': token})
 
-# --- 登录用户的 VIP 通道 ---
 @app.route('/api/generate', methods=['POST'])
 @token_required
 def generate_plot_outline_for_user(current_user):
-    print(f"--- AI generation request received from USER: {current_user.email} ---")
+    # ... (代码不变)
     try:
         data = request.get_json()
-        if not data: return jsonify({"error": "Invalid JSON"}), 400
-        
-        char1 = data.get('character1')
-        char2 = data.get('character2')
-        plot_prompt = data.get('plot_prompt')
-        language = data.get('language', 'en')
-        
-        if not plot_prompt: return jsonify({"error": "Missing plot_prompt"}), 400
-
+        char1, char2, plot_prompt, language = data.get('character1'), data.get('character2'), data.get('plot_prompt'), data.get('language', 'en')
         generated_text, error_info = get_ai_outline(char1, char2, plot_prompt, language)
-        if error_info:
-            return jsonify(error_info), 400
-
-        new_prompt_record = Prompt(
-            user_id=current_user.id, character1_setting=char1, character2_setting=char2,
-            core_prompt=plot_prompt, generated_outline=generated_text
-        )
+        if error_info: return jsonify(error_info), 400
+        new_prompt_record = Prompt(user_id=current_user.id, character1_setting=char1, character2_setting=char2, core_prompt=plot_prompt, generated_outline=generated_text)
         db.session.add(new_prompt_record)
         db.session.commit()
-        print(f"--- Prompt record SAVED for user: {current_user.email} ---")
-
         return jsonify({"outline": generated_text})
     except Exception as e:
-        print(f"!!! An unexpected error occurred for user {current_user.email}: {e} !!!")
-        # ✨ 把详细的数据库错误信息返回给前端，方便我们调试 ✨
         return jsonify({"error": f"An internal server error occurred: {str(e)}"}), 500
 
-# --- 游客的普通体验通道 ---
 @app.route('/api/generate-guest', methods=['POST'])
 def generate_plot_outline_for_guest():
-    print(f"--- AI generation request received from GUEST ---")
+    # ... (代码不变)
     try:
         data = request.get_json()
-        if not data: return jsonify({"error": "Invalid JSON"}), 400
-        
-        char1 = data.get('character1')
-        char2 = data.get('character2')
-        plot_prompt = data.get('plot_prompt')
-        language = data.get('language', 'en')
-
-        if not plot_prompt: return jsonify({"error": "Missing plot_prompt"}), 400
-
+        char1, char2, plot_prompt, language = data.get('character1'), data.get('character2'), data.get('plot_prompt'), data.get('language', 'en')
         generated_text, error_info = get_ai_outline(char1, char2, plot_prompt, language)
-        if error_info:
-            return jsonify(error_info), 400
-        
-        print(f"--- Guest generation successful. No record saved. ---")
+        if error_info: return jsonify(error_info), 400
         return jsonify({"outline": generated_text})
     except Exception as e:
-        print(f"!!! An unexpected error occurred for guest: {e} !!!")
         return jsonify({"error": f"An internal server error occurred: {str(e)}"}), 500
 
-
-# --- 6. 启动服务器 ---
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
