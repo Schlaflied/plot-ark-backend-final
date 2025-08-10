@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 Flask==2.3.3
 Werkzeug==2.3.7
 gunicorn
@@ -7,3 +8,17 @@ Flask-Cors
 Flask-SQLAlchemy
 psycopg2-binary
 PyJWT
+=======
+# -----------------------------------------------------------------------------
+# 「灵感方舟」后端依赖文件 (Plot Ark Backend Dependencies)
+# 版本: 4.0 - 最终完美兼容版 (The Perfect Match)
+# 描述: 根据构建日志的真实反馈，提供了Flask和Werkzeug的完美兼容组合。
+# -----------------------------------------------------------------------------
+
+Flask==2.3.3
+Werkzeug==2.3.7
+gunicorn
+python-dotenv
+google-generativeai
+Flask-Cors
+>>>>>>> b4717f651e9b1d19e2f45523066618b1d2bb0c85
