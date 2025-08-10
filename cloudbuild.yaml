@@ -1,10 +1,6 @@
 # -----------------------------------------------------------------------------
 # 「灵感方舟」施工总纲领 (Plot Ark Cloud Build Master Plan)
-<<<<<<< HEAD
 # 版本: 3.0 - 最终授权版 (The Final Authorization)
-=======
-# 版本: 2.0 - 最终授权版 (The Final Authorization)
->>>>>>> b4717f651e9b1d19e2f45523066618b1d2bb0c85
 # 描述: 这份文件拥有最高权限，将指导Cloud Build完成所有构建和部署工作。
 # -----------------------------------------------------------------------------
 steps:
@@ -16,11 +12,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/plot-ark-backend:$COMMIT_SHA']
 
-<<<<<<< HEAD
   # 第3步：将这个全新的、完美的镜像部署到Cloud Run (注入所有秘密！)
-=======
-  # 第3步：将这个全新的、完美的镜像部署到Cloud Run (增加了密钥授权！)
->>>>>>> b4717f651e9b1d19e2f45523066618b1d2bb0c85
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -34,15 +26,8 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated' # <-- 允许公开访问
-<<<<<<< HEAD
       # --- 这就是我们最终的魔法！用逗号分隔，注入所有秘密！---
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,DATABASE_URL=DATABASE_URL:latest,SECRET_KEY=SECRET_KEY:latest'
-=======
-      # --- 这就是我们最终的魔法！---
-      # 告诉Cloud Run，去Secret Manager里找到名叫'GOOGLE_API_KEY'的密钥，
-      # 用它的最新版本(latest)，创建一个同名的环境变量。
-      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest'
->>>>>>> b4717f651e9b1d19e2f45523066618b1d2bb0c85
 
 # 我们将构建好的镜像信息保存下来
 images:
