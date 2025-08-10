@@ -36,3 +36,5 @@ images:
 # 解决日志问题的关键！我们在这里明确告诉它日志记录的方式！
 options:
   logging: CLOUD_LOGGING_ONLY
+
+
