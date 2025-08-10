@@ -2,8 +2,8 @@
 
 # -----------------------------------------------------------------------------
 # 「灵感方舟」后端核心应用 (Plot Ark Backend Core)
-# 版本: 11.1 - 修复了登录用户生成时的致命拼写错误
-# 描述: 修正了之前版本中的一个 NameError，现在登录用户和游客都能正常使用。
+# 版本: 12.0 - 数据库连接池升级！
+# 描述: 引入了 SQLAlchemy 的连接池配置，以解决 SSL 连接意外关闭的问题。
 # -----------------------------------------------------------------------------
 
 import os
@@ -29,6 +29,16 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'a-very-secret-key-for-l
 DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://neondb_owner:npg_Q3cNO9dJhyHA@ep-small-leaf-aei7oe8l-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require')
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# --- ✨ 数据库连接池优化 ✨ ---
+# 这是解决 SSL 连接问题的关键！
+# pool_recycle: 每隔一段时间（比如280秒）回收一次连接，防止连接因空闲而被服务器关闭。
+# pool_pre_ping: 在每次从池中获取连接时，先发送一个简单的 "ping" 查询来测试连接是否仍然有效。
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_recycle': 280,
+    'pool_pre_ping': True
+}
+
 
 db = SQLAlchemy(app)
 
@@ -126,7 +136,7 @@ Please generate a detailed plot outline with the following sections:
 # --- 5. API 路由定义 ---
 @app.route('/')
 def index():
-    return jsonify({ "status": "online", "message": "Welcome to Plot Ark Backend! Database is connected.", "version": "11.1" })
+    return jsonify({ "status": "online", "message": "Welcome to Plot Ark Backend! Database is connected.", "version": "12.0" })
 
 @app.route('/api/register', methods=['POST'])
 def register():
@@ -162,7 +172,6 @@ def generate_plot_outline_for_user(current_user):
         data = request.get_json()
         if not data: return jsonify({"error": "Invalid JSON"}), 400
         
-        # ✨✨✨ 这就是修复的地方！ a -> data ✨✨✨
         char1 = data.get('character1')
         char2 = data.get('character2')
         plot_prompt = data.get('plot_prompt')
@@ -185,7 +194,8 @@ def generate_plot_outline_for_user(current_user):
         return jsonify({"outline": generated_text})
     except Exception as e:
         print(f"!!! An unexpected error occurred for user {current_user.email}: {e} !!!")
-        return jsonify({"error": "An internal server error occurred."}), 500
+        # ✨ 把详细的数据库错误信息返回给前端，方便我们调试 ✨
+        return jsonify({"error": f"An internal server error occurred: {str(e)}"}), 500
 
 # --- 游客的普通体验通道 ---
 @app.route('/api/generate-guest', methods=['POST'])
@@ -210,13 +220,15 @@ def generate_plot_outline_for_guest():
         return jsonify({"outline": generated_text})
     except Exception as e:
         print(f"!!! An unexpected error occurred for guest: {e} !!!")
-        return jsonify({"error": "An internal server error occurred."}), 500
+        return jsonify({"error": f"An internal server error occurred: {str(e)}"}), 500
 
 
 # --- 6. 启动服务器 ---
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
+
+
 
 
 
