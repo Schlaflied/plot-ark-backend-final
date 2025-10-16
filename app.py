@@ -1,57 +1,55 @@
-<<<<<<< HEAD
 # -*- coding: utf-8 -*-
-
 # -----------------------------------------------------------------------------
 # 「灵感方舟」后端核心应用 (Plot Ark Backend Core)
-# 文件名: app.py
-# 作者: Gemini (为你和Syna的梦想助力!)
-# 描述: 注入灵魂！集成了SQL数据库、用户系统和JWT安全认证！
-# 版本: 10.2 - 修复了Neon DB的SSL连接问题！
+# 版本: 25.3 - 最终修复版
+# 描述:
+# 1. 将模型恢复为项目核心 gemini-2.5-pro。
+# 2. 修正了 app.run 中 host 参数的致命拼写错误 ('0.logg.0' -> '0.0.0.0')。
+# 下一步的关键是在 Cloud Run 中设置"最小实例"为 1 来彻底解决冷启动超时问题。
 # -----------------------------------------------------------------------------
-
 import os
 import datetime
 import jwt
+import traceback
 from functools import wraps
+
 import google.generativeai as genai
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, url_for
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
+from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadTimeSignature
+import sib_api_v3_sdk
+from sib_api_v3_sdk.rest import ApiException
+# from flask_mail import Mail, Message
 
-# --- 关键一步：在所有配置之前加载.env文件 ---
+
+# --- 1. 初始化与配置 ---
 load_dotenv()
-
-# --- 1. 初始化和配置 ---
 app = Flask(__name__)
-CORS(app) 
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# --- 2. 核心配置 (从环境变量加载) ---
+# --- 核心配置 ---
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'a-very-secret-key-for-local-dev')
-# --- 关键修改：更新了默认的DATABASE_URL以匹配.env中的简化版 ---
-DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://neondb_owner:npg_Q3cNO9dJhyHA@ep-small-leaf-aei7oe8l-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require')
+app.config['ADMIN_SECRET_TOKEN'] = os.environ.get('ADMIN_SECRET_TOKEN', 'a-super-secret-admin-token-for-n8n')
+DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://user:password@host:port/dbname')
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_recycle': 280, 'pool_pre_ping': True}
 
+
+# --- 数据库与模型定义 ---
 db = SQLAlchemy(app)
 
-api_key = os.getenv("GOOGLE_API_KEY")
-if not api_key:
-    raise ValueError("FATAL ERROR: GOOGLE_API_KEY environment variable is not set.")
-genai.configure(api_key=api_key)
-
-# ... (你其他的代码，比如数据库模型、API路由等，都保持不变)
-# --- 3. 数据库模型定义 (我们的“数据蓝图”) ---
 class User(db.Model):
-    """用户表"""
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256)) 
-    subscription_tier = db.Column(db.String(50), default='free', nullable=False)
+    password_hash = db.Column(db.String(256))
+    credits = db.Column(db.Integer, nullable=False, default=0)
+    is_verified = db.Column(db.Boolean, nullable=False, default=False)
 
 class Prompt(db.Model):
-    """用户创作记录表"""
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     character1_setting = db.Column(db.Text)
@@ -63,286 +61,415 @@ class Prompt(db.Model):
 with app.app_context():
     db.create_all()
 
-# --- 4. 安全认证 (我们的“令牌系统”) ---
+
+# --- API 密钥配置 ---
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
+try:
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        print("✅ Gemini API 密钥配置成功！")
+    else:
+        print("⚠️ 警告：GOOGLE_API_KEY 环境变量未设置。AI生成功能将不可用。")
+except Exception as e:
+    print(f"❌ Gemini API 密钥配置失败: {e}")
+
+
+# --- 2. 辅助函数与装饰器 ---
+def make_error_response(error_type, message, status_code):
+    response = jsonify(error=error_type, message=message)
+    response.status_code = status_code
+    return response
+
+def send_verification_email(user_email):
+    serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+    token = serializer.dumps(user_email, salt='email-confirm-salt')
+    verification_url = url_for('verify_email_token', token=token, _external=True)
+
+    # Brevo API 配置
+    configuration = sib_api_v3_sdk.Configuration()
+    configuration.api_key['api-key'] = os.environ.get('BREVO_API_KEY')
+
+    if not configuration.api_key['api-key']:
+        print("!!! 邮件服务未配置：BREVO_API_KEY 环境变量未设置。邮件功能不可用。")
+        # 在开发环境中，仍然打印链接以便测试
+        print(f"!!! 为 {user_email} 生成的验证链接 (仅供测试): {verification_url}")
+        return False, "BREVO_API_KEY not set."
+
+    api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
+
+    # 邮件内容
+    subject = "请验证您的 Plot Ark 账户邮箱"
+    html_content = f"""<html><body>
+            <h2>欢迎来到 Plot Ark！</h2>
+            <p>感谢您的注册。请点击下方的按钮来激活您的账户，领取免费创作点数。</p>
+            <a href=\"{verification_url}\" target=\"_blank\" style=\"font-size: 16px; font-family: Helvetica, Arial, sans-serif; color: #ffffff; text-decoration: none; background-color: #007bff; border-radius: 5px; padding: 10px 20px; display: inline-block;\">激活账户</a>
+            <p style=\"margin-top: 20px; font-size: 12px; color: #888;\">如果您没有请求注册 Plot Ark，请忽略此邮件。</p>
+            </body></html>"""
+    sender = {"name": "Plot Ark", "email": "noreply@plot-ark.com"} # *** 重要：请替换成您的域名 ***
+    to = [{"email": user_email}]
+
+    send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(to=to, html_content=html_content, sender=sender, subject=subject)
+
+    # 发送邮件
+    try:
+        api_response = api_instance.send_transac_email(send_smtp_email)
+        print(f"邮件已发送至 {user_email}。 Brevo响应: {api_response})")
+        return True, "Verification email sent."
+    except ApiException as e:
+        print(f"!!! 通过Brevo发送邮件失败: {e} !!!")
+        return False, str(e)
+
 def token_required(f):
-    """一个Python装饰器，用来保护需要登录才能访问的API"""
     @wraps(f)
     def decorated(*args, **kwargs):
         token = None
-        if 'Authorization' in request.headers:
-            token = request.headers['Authorization'].split(" ")[1]
-        
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+
         if not token:
-            return jsonify({'message': '缺少认证令牌!'}), 401
-        
+            # Fallback for requests with no token at all
+            current_user = type('Guest', (), {'is_verified': True, 'credits': 3, 'id': -1, 'is_guest': True})()
+            return f(current_user, *args, **kwargs)
+
+        # Handle guest users who have a 'guest-...' token
+        if token.startswith('guest-'):
+            current_user = type('Guest', (), {'is_verified': True, 'credits': 3, 'id': -1, 'is_guest': True})()
+            return f(current_user, *args, **kwargs)
+
+        # Handle real, logged-in users with a JWT
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
             current_user = User.query.get(data['user_id'])
-        except Exception as e:
-            return jsonify({'message': '认证令牌无效!', 'error': str(e)}), 401
-        
+            if not current_user:
+                return make_error_response('user_not_found', '认证令牌无效，找不到用户', 401)
+            current_user.is_guest = False
+        except jwt.ExpiredSignatureError:
+            return make_error_response('token_expired', '认证令牌已过期', 401)
+        except jwt.InvalidTokenError:
+            return make_error_response('token_invalid', '认证令牌无效', 401)
         return f(current_user, *args, **kwargs)
     return decorated
 
-# --- 5. API 路由定义 ---
+def admin_token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        admin_token = request.headers.get('X-Admin-Token')
+        if not admin_token or admin_token != app.config['ADMIN_SECRET_TOKEN']:
+            return make_error_response('unauthorized', '缺少或无效的管理员令牌', 403)
+        return f(*args, **kwargs)
+    return decorated
+
+
+# --- 3. AI 核心功能 ---
+def get_ai_outline(char1, char2, plot_prompt, language):
+    language_instructions = {'en': 'in English', 'zh-CN': 'in Simplified Chinese (简体中文)', 'zh-TW': 'in Traditional Chinese (繁體中文)'}
+    output_language_instruction = language_instructions.get(language, 'in English')
+
+    section_titles = {
+        'en': {
+            'char_analysis': 'Character Analysis',
+            'plot_outline': 'Plot Outline',
+            'opening': 'Opening',
+            'inciting_incident': 'Inciting Incident',
+            'rising_action': 'Rising Action',
+            'climax': 'Climax',
+            'falling_action': 'Falling Action',
+            'resolution': 'Resolution',
+            'char1_label': 'Character 1',
+            'char2_label': 'Character 2',
+        },
+        'zh-CN': {
+            'char_analysis': '角色性格分析',
+            'plot_outline': '情节大纲',
+            'opening': '开篇',
+            'inciting_incident': '导火索',
+            'rising_action': '发展部分',
+            'climax': '高潮',
+            'falling_action': '回落部分',
+            'resolution': '结局',
+            'char1_label': '角色1',
+            'char2_label': '角色2',
+        },
+        'zh-TW': {
+            'char_analysis': '角色性格分析', # Assuming same for now, can be adjusted if needed
+            'plot_outline': '情節大綱',
+            'opening': '開篇',
+            'inciting_incident': '導火線',
+            'rising_action': '發展部分',
+            'climax': '高潮',
+            'falling_action': '回落部分',
+            'resolution': '結局',
+            'char1_label': '角色1',
+            'char2_label': '角色2',
+        }
+    }
+    current_titles = section_titles.get(language, section_titles['en']) # Fallback to English
+
+    prompt = f"""
+# ROLE & GOAL
+You are a character-driven storyteller and a master of literary analysis. Your highest priority is maintaining character integrity. Your goal is to generate a plot outline that feels like it was written by someone who has loved these characters for years, and you MUST generate it in the requested language.
+
+# CORE DIRECTIVES - YOU MUST FOLLOW THESE RULES
+1. **NO OOC (Out Of Character) ACTIONS**: This is the most critical rule. Before writing, deeply analyze the provided character descriptions. Every action, decision, and reaction in the plot MUST be a believable extension of their established personality, history, and motivations.
+2. **NO CONVERSATIONAL PREAMBLE**: Do not start your response with any conversational text like "好的，我将..." or "Okay, I will...". Begin your response directly with the requested analysis.
+3. **USE MARKDOWN FOR STRUCTURE**: You must use markdown for formatting as specified in the OUTPUT FORMAT section.
+4. **STRICTLY ADHERE TO LANGUAGE**: Your entire output, including section titles and content, MUST be in the language specified by '{output_language_instruction}'.
+
+# TASK
+Generate a character analysis and a detailed plot outline **{output_language_instruction}** based on the following information.
+
+**Character 1:** {char1}
+**Character 2:** {char2}
+**Core Plot Prompt:** {plot_prompt}
+
+# OUTPUT FORMAT
+Your output MUST be in markdown format and structured EXACTLY as follows. Ensure there is a blank line after each heading.
+
+### {current_titles['char_analysis']}
+
+* {current_titles['char1_label']}: [Identify Character 1's name from the input. Then, begin your analysis with the character's name followed by a comma and the analysis text.]
+* {current_titles['char2_label']}: [Identify Character 2's name from the input. Then, begin your analysis with the character's name followed by a comma and the analysis text.]
+
+### {current_titles['plot_outline']}
+
+**1. {current_titles['opening']}:** [How the story begins]
+
+**2. {current_titles['inciting_incident']}:** [The event that kicks off the main plot]
+
+**3. {current_titles['rising_action']}:** [A series of events that build tension]
+
+**4. {current_titles['climax']}:** [The turning point of the story]
+
+**5. {current_titles['falling_action']}:** [The immediate aftermath of the climax]
+
+**6. {current_titles['resolution']}:** [The conclusion of the story]
+"""
+    try:
+        # ✅ --- 恢复使用核心模型 ---
+        model = genai.GenerativeModel('models/gemini-2.5-pro')
+        safety_settings = [{"category": c, "threshold": "BLOCK_NONE"} for c in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
+        response = model.generate_content(prompt, safety_settings=safety_settings)
+
+        if not response.parts:
+            block_reason_detail = "Unknown"
+            if response.prompt_feedback and hasattr(response.prompt_feedback, 'block_reason') and response.prompt_feedback.block_reason:
+                block_reason_detail = response.prompt_feedback.block_reason.name
+            return None, {"error": "内容被安全系统拦截", "reason": f"原因: {block_reason_detail}. 请尝试修改Prompt。"}
+
+        return response.text, None
+    except Exception as e:
+        print(f"!!! AI 调用失败: {e} !!!"); print(traceback.format_exc())
+        return None, {"error": "AI 服务调用时发生内部错误", "reason": str(e)}
+
+
+# --- 4. API 路由定义 ---
 @app.route('/')
 def index():
-    """根路由，用来确认服务是否在线"""
     return jsonify({
         "status": "online",
-        "message": "Welcome to Plot Ark Backend! Database is connected.",
-        "version": "10.2"
+        "message": "Welcome to Plot Ark Backend!",
+        "version": "25.3 Final-Fixed"
     })
 
 @app.route('/api/register', methods=['POST'])
 def register():
-    """用户注册API"""
+    # ... (代码不变)
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
 
     if not email or not password:
-        return jsonify({'message': '邮箱和密码不能为空!'}), 400
+        return make_error_response('missing_credentials', '邮箱和密码不能为空', 400)
 
     if User.query.filter_by(email=email).first():
-        return jsonify({'message': '该邮箱已被注册!'}), 409
+        return make_error_response('email_exists', '该邮箱已被注册', 409)
 
     hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
-    new_user = User(email=email, password_hash=hashed_password)
+    new_user = User(email=email, password_hash=hashed_password, is_verified=False, credits=0)
     db.session.add(new_user)
     db.session.commit()
 
-    return jsonify({'message': '注册成功!'}), 201
+    success, detail = send_verification_email(new_user.email)
+    if success:
+        response_data = {'message': '注册成功! 请检查您的邮箱以激活账户。'}
+        if "http" in str(detail): # 仅在测试环境下返回验证链接
+            response_data['verification_url_for_testing'] = detail
+        return jsonify(response_data), 201
+    else:
+        return make_error_response('email_error', f'用户已创建，但验证邮件发送失败: {detail}', 500)
+
+
+@app.route('/api/verify-email/<token>', methods=['GET'])
+def verify_email_token(token):
+    # ... (代码不变)
+    serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+    try:
+        email = serializer.loads(token, salt='email-confirm-salt', max_age=3600) # 1 hour expiration
+    except SignatureExpired:
+        return make_error_response('token_expired', '验证链接已过期', 400)
+    except (BadTimeSignature, Exception):
+        return make_error_response('token_invalid', '验证链接无效', 400)
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return make_error_response('user_not_found', '找不到该邮箱对应的用户', 404)
+
+    if user.is_verified:
+        return jsonify({'message': '账户已被激活，无需重复操作。'}), 200
+
+    user.is_verified = True
+    user.credits = 3 # 激活赠送3点
+    db.session.commit()
+    return jsonify({'message': '账户激活成功！已赠送3点免费创作点数。'}), 200
+
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    """用户登录API，成功后会返回一个认证令牌"""
+    # ... (代码不变)
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
 
     if not email or not password:
-        return jsonify({'message': '请输入邮箱和密码'}), 401
+        return make_error_response('missing_credentials', '请输入邮箱和密码', 401)
 
     user = User.query.filter_by(email=email).first()
-
     if not user or not check_password_hash(user.password_hash, password):
-        return jsonify({'message': '邮箱或密码错误!'}), 401
+        return make_error_response('invalid_credentials', '邮箱或密码错误', 401)
 
-    token = jwt.encode({
-        'user_id': user.id,
-        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
-    }, app.config['SECRET_KEY'], algorithm="HS256")
+    token = jwt.encode({'user_id': user.id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)},
+                       app.config['SECRET_KEY'], algorithm="HS256")
 
-    return jsonify({'token': token})
+    return jsonify({
+        'token': token,
+        'user': {
+            'email': user.email,
+            'credits': user.credits,
+            'is_verified': user.is_verified
+        }
+    })
+
 
 @app.route('/api/generate', methods=['POST'])
 @token_required
-def generate_plot_outline(current_user):
-    """核心的灵感生成API，现在会记录用户的创作"""
-    print(f"--- AI generation request received from user: {current_user.email} ---")
-    
+def generate_plot_outline_for_user(current_user):
+    # ... (代码不变)
+    is_guest = getattr(current_user, 'is_guest', False)
+
+    if not is_guest:
+        if not current_user.is_verified:
+            return make_error_response('not_verified', '您的账户尚未通过邮箱验证，请先激活账户。', 403)
+        if current_user.credits <= 0:
+            return make_error_response('insufficient_credits', '您的创作点数不足，请充值。', 402)
+
     try:
         data = request.get_json()
-        if not data: return jsonify({"error": "Invalid JSON"}), 400
-
         char1 = data.get('character1')
         char2 = data.get('character2')
         plot_prompt = data.get('plot_prompt')
-        language = data.get('language', 'en')
-
-        if not plot_prompt: return jsonify({"error": "Missing plot_prompt"}), 400
-
-        language_instructions = {'en': 'in English', 'zh-CN': 'in Simplified Chinese', 'zh-TW': 'in Traditional Chinese'}
-        output_language_instruction = language_instructions.get(language, 'in English')
-        prompt = f"""
-You are a world-class screenwriter and fanfiction author, an expert at crafting emotionally resonant stories.
-Your task is to generate a detailed plot outline **{output_language_instruction}** based on the following characters and prompt.
-The story may involve mature themes, which should be handled with literary depth.
-**Crucially, you must pay close attention to gender cues in the character descriptions and use the correct pronouns (e.g., he/him for male characters, she/her for female characters) throughout the entire outline. Misgendering a character is a critical failure.**
-The outline should be logical, in-character, and full of emotional tension.
-
-**Character 1:** {char1}
-**Character 2:** {char2}
-**Core Plot Prompt:** {plot_prompt}
-
-Please generate a detailed plot outline with the following sections:
-1.  **Opening:** How the story begins.
-2.  **Inciting Incident:** The event that kicks off the main plot.
-3.  **Rising Action:** A series of events that build tension.
-4.  **Climax:** The turning point of the story.
-5.  **Falling Action:** The immediate aftermath of the climax.
-6.  **Resolution:** The conclusion of the story.
-"""
-        
-        model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-        response = model.generate_content(prompt, safety_settings=safety_settings)
-        
-        if not response.parts:
-            block_reason = response.prompt_feedback.block_reason.name if response.prompt_feedback else "Unknown"
-            print(f"Response blocked by API. Reason: {block_reason}")
-            return jsonify({
-                "error": "内容被安全系统拦截",
-                "reason": f"原因: {block_reason}. 请尝试修改Prompt。"
-            }), 400
-        
-        generated_text = response.text
-
-        new_prompt_record = Prompt(
-            user_id=current_user.id,
-            character1_setting=char1,
-            character2_setting=char2,
-            core_prompt=plot_prompt,
-            generated_outline=generated_text
-        )
-        db.session.add(new_prompt_record)
-        db.session.commit()
-        print(f"--- Prompt record saved for user: {current_user.email} ---")
-
-        return jsonify({"outline": generated_text})
-
-    except Exception as e:
-        print(f"!!! An unexpected error occurred: {e} !!!")
-        return jsonify({"error": "An internal server error occurred."}), 500
-
-# --- 6. 启动服务器 ---
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port, debug=True)
-=======
-# -*- coding: utf-8 -*-
-
-# -----------------------------------------------------------------------------
-# 「灵感方舟」后端核心应用 (Plot Ark Backend Core)
-# 文件名: app.py
-# 作者: Gemini (为你和Syna的梦想助力!)
-# 描述: 最终胜利版！集成了多语言和增强的性别代词处理！
-# 版本: 9.0 - Cloud Run Production Ready
-# -----------------------------------------------------------------------------
-
-import os
-import google.generativeai as genai
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-
-# --- 1. 初始化和配置 ---
-app = Flask(__name__)
-# 在生产环境中，CORS的来源可以更具体，但现在这样是OK的
-CORS(app) 
-
-# --- 2. 配置Google Gemini API ---
-# 在Cloud Run中，我们会直接设置环境变量，而不是用.env文件
-api_key = os.getenv("GOOGLE_API_KEY")
-if not api_key:
-    # 这会在Cloud Run日志中留下一个明确的错误，方便调试
-    raise ValueError("FATAL ERROR: GOOGLE_API_KEY environment variable is not set.")
-genai.configure(api_key=api_key)
-
-# --- 3. 定义API路由 ---
-@app.route('/')
-def index():
-    """
-    一个简单的根路由，用来确认服务是否正在运行。
-    直接访问你的URL时，会看到这个消息。
-    """
-    return jsonify({
-        "status": "online",
-        "message": "Welcome to the Plot Ark Backend! The service is running correctly.",
-        "version": "9.0"
-    })
-
-@app.route('/api/generate', methods=['POST'])
-def generate_plot_outline():
-    """
-    这个函数处理核心的灵感生成请求。
-    """
-    print("--- AI generation request received! ---")
-    
-    try:
-        # --- a. 获取并验证请求数据 ---
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Invalid JSON"}), 400
-
-        char1 = data.get('character1')
-        char2 = data.get('character2')
-        plot_prompt = data.get('plot_prompt')
-        language = data.get('language', 'en')
-        print(f"Language requested: {language}")
+        language = data.get('language', 'en') # 默认为英文
 
         if not all([char1, char2, plot_prompt]):
-            return jsonify({"error": "Missing required data"}), 400
+            return make_error_response('missing_input', '角色1, 角色2, 和核心梗不能为空。', 400)
 
-        # --- b. 构建Prompt并调用AI ---
-        print("Data validated. Building prompt for Gemini API...")
+        generated_text, error_info = get_ai_outline(char1, char2, plot_prompt, language)
 
-        language_instructions = {
-            'en': 'in English',
-            'zh-CN': 'in Simplified Chinese',
-            'zh-TW': 'in Traditional Chinese'
-        }
-        output_language_instruction = language_instructions.get(language, 'in English')
-        print(f"AI instruction set to: {output_language_instruction}")
+        if error_info:
+            return jsonify(error_info), 500
 
-        # --- 关键改动：添加了关于性别代词的严格指令 ---
-        prompt = f"""
-You are a world-class screenwriter and fanfiction author, an expert at crafting emotionally resonant stories.
-Your task is to generate a detailed plot outline **{output_language_instruction}** based on the following characters and prompt.
-The story may involve mature themes, which should be handled with literary depth.
-**Crucially, you must pay close attention to gender cues in the character descriptions and use the correct pronouns (e.g., he/him for male characters, she/her for female characters) throughout the entire outline. Misgendering a character is a critical failure.**
-The outline should be logical, in-character, and full of emotional tension.
+        remaining_credits = None
+        if not is_guest:
+            current_user.credits -= 1
+            new_prompt_record = Prompt(user_id=current_user.id,
+                                       character1_setting=char1,
+                                       character2_setting=char2,
+                                       core_prompt=plot_prompt,
+                                       generated_outline=generated_text)
+            db.session.add(new_prompt_record)
+            db.session.commit()
+            remaining_credits = current_user.credits
 
-**Character 1:** {char1}
-**Character 2:** {char2}
-**Core Plot Prompt:** {plot_prompt}
+        response_data = {"outline": generated_text}
+        if remaining_credits is not None:
+            response_data["remaining_credits"] = remaining_credits
 
-Please generate a detailed plot outline with the following sections:
-1.  **Opening:** How the story begins.
-2.  **Inciting Incident:** The event that kicks off the main plot.
-3.  **Rising Action:** A series of events that build tension.
-4.  **Climax:** The turning point of the story.
-5.  **Falling Action:** The immediate aftermath of the climax.
-6.  **Resolution:** The conclusion of the story.
-"""
-        
-        model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
-        
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-
-        response = model.generate_content(prompt, safety_settings=safety_settings)
-        
-        if not response.parts:
-            block_reason = response.prompt_feedback.block_reason.name if response.prompt_feedback else "Unknown"
-            print(f"Response blocked by API. Reason: {block_reason}")
-            return jsonify({
-                "error": "内容被安全系统拦截",
-                "reason": f"原因: {block_reason}. 请尝试修改Prompt。"
-            }), 400
-
-        print("Successfully received response from Gemini API.")
-        return jsonify({"outline": response.text})
+        return jsonify(response_data)
 
     except Exception as e:
-        print(f"!!! An unexpected error occurred: {e} !!!")
-        return jsonify({"error": "An internal server error occurred."}), 500
+        db.session.rollback() # 确保在异常发生时回滚数据库事务
+        print(f"!!! /api/generate 发生未知错误: {e} !!!"); print(traceback.format_exc())
+        return make_error_response("internal_server_error", "处理您的请求时发生未知错误。", 500)
 
-# --- 4. 启动服务器 (生产环境) ---
-# Cloud Run会使用Gunicorn这样的生产服务器来运行你的应用,
-# 它会自己寻找一个叫做'app'的Flask实例。
-# 下面的代码块在Cloud Run上不会被执行，但保留它用于本地测试。
+
+@app.route('/api/history', methods=['GET'])
+@token_required
+def get_history(current_user):
+    # ... (代码不变)
+    if getattr(current_user, 'is_guest', False):
+        return jsonify([]) # 游客没有历史记录
+
+    prompts = Prompt.query.filter_by(user_id=current_user.id).order_by(Prompt.created_at.desc()).all()
+    history_list = [{
+        'id': p.id,
+        'character1_setting': p.character1_setting,
+        'character2_setting': p.character2_setting,
+        'core_prompt': p.core_prompt,
+        'generated_outline': p.generated_outline,
+        'created_at': p.created_at.isoformat() + "Z" # ISO 8601 格式
+    } for p in prompts]
+    return jsonify(history_list)
+
+
+@app.route('/api/history/<int:prompt_id>', methods=['DELETE'])
+@token_required
+def delete_history_item(current_user, prompt_id):
+    # ... (代码不变)
+    if getattr(current_user, 'is_guest', False):
+        return make_error_response("unauthorized", "游客无权删除记录。", 403)
+
+    prompt_to_delete = Prompt.query.get(prompt_id)
+
+    if not prompt_to_delete:
+        return make_error_response("not_found", "记录未找到。", 404)
+
+    if prompt_to_delete.user_id != current_user.id:
+        return make_error_response("unauthorized", "无权删除此记录。", 403)
+
+    db.session.delete(prompt_to_delete)
+    db.session.commit()
+    return jsonify({"message": "记录已成功删除。"}), 200
+
+
+@app.route('/api/admin/update_credits', methods=['POST'])
+@admin_token_required
+def admin_update_credits():
+    # ... (代码不变)
+    data = request.get_json()
+    email = data.get('email')
+    credits_to_add = data.get('credits_to_add')
+
+    if not email or credits_to_add is None:
+        return make_error_response('bad_request', '请求体中必须包含 email 和 credits_to_add', 400)
+
+    try:
+        credits_to_add = int(credits_to_add)
+    except (ValueError, TypeError):
+        return make_error_response('bad_request', 'credits_to_add 必须是一个整数', 400)
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return make_error_response('user_not_found', f'找不到邮箱为 {email} 的用户', 404)
+
+    user.credits += credits_to_add
+    db.session.commit()
+
+    print(f"管理员操作：为用户 {email} 增加了 {credits_to_add} 点数。新余额: {user.credits}")
+    return jsonify({'message': '点数更新成功', 'email': user.email, 'new_credits_balance': user.credits})
+
+
+# --- 5. 启动服务 ---
 if __name__ == '__main__':
-    # 从环境变量中获取端口，为Cloud Run做准备，本地默认5000
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
->>>>>>> b4717f651e9b1d19e2f45523066618b1d2bb0c85
+    port = int(os.environ.get("PORT", 8080))
+    # ✅ --- 修正拼写错误 ---
+    app.run(host='0.0.0.0', port=port, debug=False)
