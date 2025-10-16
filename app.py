@@ -285,19 +285,30 @@ def register():
     if User.query.filter_by(email=email).first():
         return make_error_response('email_exists', '该邮箱已被注册', 409)
 
-    hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
-    new_user = User(email=email, password_hash=hashed_password, is_verified=False, credits=0)
-    db.session.add(new_user)
-    db.session.commit()
+    try:
+        hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
+        new_user = User(email=email, password_hash=hashed_password, is_verified=False, credits=0)
+        db.session.add(new_user)
+        db.session.commit()
 
-    success, detail = send_verification_email(new_user.email)
-    if success:
-        response_data = {'message': '注册成功! 请检查您的邮箱以激活账户。'}
-        if "http" in str(detail): # 仅在测试环境下返回验证链接
-            response_data['verification_url_for_testing'] = detail
-        return jsonify(response_data), 201
-    else:
-        return make_error_response('email_error', f'用户已创建，但验证邮件发送失败: {detail}', 500)
+        success, detail = send_verification_email(new_user.email)
+        if success:
+            response_data = {'message': '注册成功! 请检查您的邮箱以激活账户。'}
+            # 在开发/测试环境中，如果send_verification_email返回了URL，则将其包含在响应中
+            if "http" in str(detail) or "BREVO_API_KEY not set" in str(detail):
+                 # 从 "BREVO_API_KEY not set." 和打印的日志中提取URL
+                verification_url_for_testing = f"http://127.0.0.1:8080/api/verify-email/{detail.split(' ')[-1]}" if "BREVO_API_KEY not set" in str(detail) else detail
+                response_data['verification_url_for_testing'] = verification_url_for_testing
+            return jsonify(response_data), 201
+        else:
+            # 如果邮件发送失败，这依然是一个需要告知用户的情况，但不一定是服务器500错误
+            return make_error_response('email_error', f'用户已创建，但验证邮件发送失败: {detail}', 502) # 502 Bad Gateway 更适合表示上游服务问题
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"!!! /api/register 发生严重错误: {e} !!!")
+        print(traceback.format_exc())
+        return make_error_response("registration_failed", f"注册过程中发生内部错误，操作已回滚。错误详情: {e}", 500)
 
 
 @app.route('/api/verify-email/<token>', methods=['GET'])
