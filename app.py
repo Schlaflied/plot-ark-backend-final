@@ -328,12 +328,56 @@ def verify_email_token(token):
         return make_error_response('user_not_found', '找不到该邮箱对应的用户', 404)
 
     if user.is_verified:
-        return jsonify({'message': '账户已被激活，无需重复操作。'}), 200
+        return redirect(url_for('verification_status', status='already_verified'))
 
     user.is_verified = True
     user.credits = 3 # 激活赠送3点
     db.session.commit()
-    return jsonify({'message': '账户激活成功！已赠送3点免费创作点数。'}), 200
+    return redirect(url_for('verification_status', status='success'))
+
+@app.route('/verification-status')
+def verification_status():
+    status = request.args.get('status')
+    message = ""
+    if status == 'success':
+        message = "账户激活成功！已赠送3点免费创作点数。"
+    elif status == 'already_verified':
+        message = "账户已被激活，无需重复操作。"
+    elif status == 'token_expired':
+        message = "验证链接已过期。"
+    elif status == 'token_invalid':
+        message = "验证链接无效。"
+    else:
+        message = "未知验证状态。"
+    
+    # 这里可以返回一个简单的HTML页面，或者渲染一个模板
+    # 为了简化，我们直接返回一个包含消息的HTML
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>账户验证状态</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f0f2f5; color: #333; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center; }}
+            .container {{ background-color: #fff; padding: 40px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); max-width: 600px; width: 100%; }}
+            h1 {{ color: #007bff; margin-bottom: 20px; }}
+            p {{ font-size: 18px; line-height: 1.6; }}
+            a {{ color: #007bff; text-decoration: none; font-weight: 600; }}
+            a:hover {{ text-decoration: underline; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>账户验证状态</h1>
+            <p>{message}</p>
+            <p><a href="/">返回首页</a></p>
+        </div>
+    </body>
+    </html>
+    """
+    return html_content, 200
 
 
 @app.route('/api/login', methods=['POST'])
