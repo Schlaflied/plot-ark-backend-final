@@ -48,6 +48,7 @@ class User(db.Model):
     password_hash = db.Column(db.String(256))
     credits = db.Column(db.Integer, nullable=False, default=0)
     is_verified = db.Column(db.Boolean, nullable=False, default=False)
+    subscription_tier = db.Column(db.String(50), nullable=True, default='free')
 
 class Prompt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
