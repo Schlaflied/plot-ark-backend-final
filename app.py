@@ -81,31 +81,58 @@ def make_error_response(error_type, message, status_code):
     response.status_code = status_code
     return response
 
-def send_verification_email(user_email):
-    serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
-    token = serializer.dumps(user_email, salt='email-confirm-salt')
+def send_verification_email(user_email, token, language='en'):
+    # serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+    # token = serializer.dumps(user_email, salt='email-confirm-salt') # Token is now passed directly
     verification_url = url_for('verify_email_token', token=token, _external=True)
+
+    email_content_templates = {
+        'en': {
+            'subject': "Verify your Plot Ark Account Email",
+            'html_content': f"""<html><body>
+                <h2>Welcome to Plot Ark!</h2>
+                <p>Thank you for registering. Please click the button below to activate your account and receive free creation credits.</p>
+                <a href=\"{verification_url}\" target=\"_blank\" style=\"font-size: 16px; font-family: Helvetica, Arial, sans-serif; color: #ffffff; text-decoration: none; background-color: #007bff; border-radius: 5px; padding: 10px 20px; display: inline-block;\">Activate Account</a>
+                <p style=\"margin-top: 20px; font-size: 12px; color: #888;\">If you did not request to register for Plot Ark, please ignore this email.</p>
+                </body></html>"""
+        },
+        'zh-CN': {
+            'subject': "请验证您的 Plot Ark 账户邮箱",
+            'html_content': f"""<html><body>
+                <h2>欢迎来到 Plot Ark！</h2>
+                <p>感谢您的注册。请点击下方的按钮来激活您的账户，领取免费创作点数。</p>
+                <a href=\"{verification_url}\" target=\"_blank\" style=\"font-size: 16px; font-family: Helvetica, Arial, sans-serif; color: #ffffff; text-decoration: none; background-color: #007bff; border-radius: 5px; padding: 10px 20px; display: inline-block;\">激活账户</a>
+                <p style=\"margin-top: 20px; font-size: 12px; color: #888;\">如果您没有请求注册 Plot Ark，请忽略此邮件。</p>
+                </body></html>"""
+        },
+        'zh-TW': {
+            'subject': "請驗證您的 Plot Ark 帳戶信箱",
+            'html_content': f"""<html><body>
+                <h2>歡迎來到 Plot Ark！</h2>
+                <p>感謝您的註冊。請點擊下方的按鈕來啟用您的帳戶，領取免費創作點數。</p>
+                <a href=\"{verification_url}\" target=\"_blank\" style=\"font-size: 16px; font-family: Helvetica, Arial, sans-serif; color: #ffffff; text-decoration: none; background-color: #007bff; border-radius: 5px; padding: 10px 20px; display: inline-block;\">啟用帳戶</a>
+                <p style=\"margin-top: 20px; font-size: 12px; color: #888;\">如果您沒有請求註冊 Plot Ark，請忽略此郵件。</p>
+                </body></html>"""
+        }
+    }
+
+    current_email_content = email_content_templates.get(language, email_content_templates['en']) # Fallback to English
 
     # Brevo API 配置
     configuration = sib_api_v3_sdk.Configuration()
     configuration.api_key['api-key'] = os.environ.get('BREVO_API_KEY')
 
     if not configuration.api_key['api-key']:
-        print("!!! 邮件服务未配置：BREVO_API_KEY 环境变量未设置。邮件功能不可用。")
+        print("!!! 邮件服务未配置：BREVO_API_KEY 环境变量未设置。邮件功能将不可用。")
         # 在开发环境中，仍然打印链接以便测试
         print(f"!!! 为 {user_email} 生成的验证链接 (仅供测试): {verification_url}")
-        return False, "BREVO_API_KEY not set."
+        return False, token # Return token for testing
 
     api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
 
     # 邮件内容
-    subject = "请验证您的 Plot Ark 账户邮箱"
-    html_content = f"""<html><body>
-            <h2>欢迎来到 Plot Ark！</h2>
-            <p>感谢您的注册。请点击下方的按钮来激活您的账户，领取免费创作点数。</p>
-            <a href=\"{verification_url}\" target=\"_blank\" style=\"font-size: 16px; font-family: Helvetica, Arial, sans-serif; color: #ffffff; text-decoration: none; background-color: #007bff; border-radius: 5px; padding: 10px 20px; display: inline-block;\">激活账户</a>
-            <p style=\"margin-top: 20px; font-size: 12px; color: #888;\">如果您没有请求注册 Plot Ark，请忽略此邮件。</p>
-            </body></html>"""
+    subject = current_email_content['subject']
+    html_content = current_email_content['html_content']
     sender = {"name": "Plot Ark", "email": "noreply@plot-ark.com"} # *** 重要：请替换成您的域名 ***
     to = [{"email": user_email}]
 
@@ -292,13 +319,17 @@ def register():
         db.session.add(new_user)
         db.session.commit()
 
-        success, detail = send_verification_email(new_user.email)
+        serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+        token = serializer.dumps(new_user.email, salt='email-confirm-salt')
+        language = data.get('language', 'en') # Get language from request, default to English
+
+        success, detail = send_verification_email(new_user.email, token, language)
         if success:
             response_data = {'message': '注册成功! 请检查您的邮箱以激活账户。'}
             # 在开发/测试环境中，如果send_verification_email返回了URL，则将其包含在响应中
             if "http" in str(detail) or "BREVO_API_KEY not set" in str(detail):
                  # 从 "BREVO_API_KEY not set." 和打印的日志中提取URL
-                verification_url_for_testing = f"http://127.0.0.1:8080/api/verify-email/{detail.split(' ')[-1]}" if "BREVO_API_KEY not set" in str(detail) else detail
+                verification_url_for_testing = f"http://127.0.0.1:8080/api/verify-email/{token}" if "BREVO_API_KEY not set" in str(detail) else detail
                 response_data['verification_url_for_testing'] = verification_url_for_testing
             return jsonify(response_data), 201
         else:
