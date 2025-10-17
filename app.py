@@ -7,6 +7,9 @@
 # 2. 修正了 app.run 中 host 参数的致命拼写错误 ('0.logg.0' -> '0.0.0.0')。
 # 下一步的关键是在 Cloud Run 中设置"最小实例"为 1 来彻底解决冷启动超时问题。
 # -----------------------------------------------------------------------------
+import os
+import datetime
+import jwt
 import traceback
 from functools import wraps
 
