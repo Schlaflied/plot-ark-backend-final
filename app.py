@@ -69,6 +69,14 @@ class Prompt(db.Model):
     generated_outline = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
+class StoryOutline(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    characters = db.Column(db.Text, nullable=True)
+    core_scenes = db.Column(db.Text, nullable=True)
+    outline = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
 with app.app_context():
     db.create_all()
 
@@ -500,23 +508,86 @@ def generate_plot_outline_for_user(current_user):
         return make_error_response("internal_server_error", "处理您的请求时发生未知错误。", 500)
 
 
+@app.route('/api/outlines', methods=['POST'])
+@token_required
+def save_outline(current_user):
+    if getattr(current_user, 'is_guest', False):
+        return make_error_response("unauthorized", "游客无法保存大纲。", 403)
+
+    data = request.get_json()
+    characters = data.get('characters')
+    core_scenes = data.get('core_scenes')
+    outline = data.get('outline')
+
+    if not outline:
+        return make_error_response('missing_input', '大纲内容不能为空。', 400)
+
+    try:
+        new_outline = StoryOutline(
+            user_id=current_user.id,
+            characters=characters,
+            core_scenes=core_scenes,
+            outline=outline
+        )
+        db.session.add(new_outline)
+        db.session.commit()
+
+        return jsonify({
+            "message": "大纲已成功保存。",
+            "outline": {
+                "id": new_outline.id,
+                "created_at": new_outline.created_at.isoformat() + "Z"
+            }
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"!!! /api/outlines POST 发生错误: {e} !!!")
+        print(traceback.format_exc())
+        return make_error_response("internal_server_error", "保存大纲时发生内部错误。", 500)
+
+
 @app.route('/api/history', methods=['GET'])
 @token_required
 def get_history(current_user):
-    # ... (代码不变)
     if getattr(current_user, 'is_guest', False):
-        return jsonify([]) # 游客没有历史记录
+        return jsonify([])  # 游客没有历史记录
 
-    prompts = Prompt.query.filter_by(user_id=current_user.id).order_by(Prompt.created_at.desc()).all()
-    history_list = [{
-        'id': p.id,
-        'character1_setting': p.character1_setting,
-        'character2_setting': p.character2_setting,
-        'core_prompt': p.core_prompt,
-        'generated_outline': p.generated_outline,
-        'created_at': p.created_at.isoformat() + "Z" # ISO 8601 格式
-    } for p in prompts]
-    return jsonify(history_list)
+    history_items = []
+
+    # 获取AI生成的历史记录
+    prompts = Prompt.query.filter_by(user_id=current_user.id).all()
+    for p in prompts:
+        history_items.append({
+            'type': 'generated', # 更简洁的类型名
+            'id': p.id,
+            # 将两个角色设定合并，以匹配 'characters' 的概念
+            'characters': f"角色1: {p.character1_setting}\n角色2: {p.character2_setting}",
+            'core_scenes': p.core_prompt, # 统一字段名
+            'outline': p.generated_outline,
+            'created_at': p.created_at
+        })
+
+    # 获取用户手动保存的大纲
+    outlines = StoryOutline.query.filter_by(user_id=current_user.id).all()
+    for o in outlines:
+        history_items.append({
+            'type': 'saved', # 更简洁的类型名
+            'id': o.id,
+            'characters': o.characters,
+            'core_scenes': o.core_scenes,
+            'outline': o.outline,
+            'created_at': o.created_at
+        })
+
+    # 按创建时间降序排序
+    history_items.sort(key=lambda x: x['created_at'], reverse=True)
+
+    # 格式化 created_at 字段
+    for item in history_items:
+        item['created_at'] = item['created_at'].isoformat() + "Z"
+
+    return jsonify(history_items)
 
 
 @app.route('/api/history/<int:prompt_id>', methods=['DELETE'])
