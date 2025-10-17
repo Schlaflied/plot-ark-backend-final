@@ -72,9 +72,10 @@ class Prompt(db.Model):
 class StoryOutline(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    characters = db.Column(db.Text, nullable=True)
-    core_scenes = db.Column(db.Text, nullable=True)
-    outline = db.Column(db.Text, nullable=False)
+    character1 = db.Column(db.Text, nullable=True)
+    character2 = db.Column(db.Text, nullable=True)
+    core_prompt = db.Column(db.Text, nullable=True)
+    generated_outline = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
 with app.app_context():
@@ -515,19 +516,21 @@ def save_outline(current_user):
         return make_error_response("unauthorized", "游客无法保存大纲。", 403)
 
     data = request.get_json()
-    characters = data.get('characters')
-    core_scenes = data.get('core_scenes')
-    outline = data.get('outline')
+    character1 = data.get('character1')
+    character2 = data.get('character2')
+    core_prompt = data.get('core_prompt')
+    generated_outline = data.get('generated_outline')
 
-    if not outline:
+    if not generated_outline:
         return make_error_response('missing_input', '大纲内容不能为空。', 400)
 
     try:
         new_outline = StoryOutline(
             user_id=current_user.id,
-            characters=characters,
-            core_scenes=core_scenes,
-            outline=outline
+            character1=character1,
+            character2=character2,
+            core_prompt=core_prompt,
+            generated_outline=generated_outline
         )
         db.session.add(new_outline)
         db.session.commit()
@@ -559,12 +562,12 @@ def get_history(current_user):
     prompts = Prompt.query.filter_by(user_id=current_user.id).all()
     for p in prompts:
         history_items.append({
-            'type': 'generated', # 更简洁的类型名
+            'type': 'generated',
             'id': p.id,
-            # 将两个角色设定合并，以匹配 'characters' 的概念
-            'characters': f"角色1: {p.character1_setting}\n角色2: {p.character2_setting}",
-            'core_scenes': p.core_prompt, # 统一字段名
-            'outline': p.generated_outline,
+            'character1': p.character1_setting,
+            'character2': p.character2_setting,
+            'core_prompt': p.core_prompt,
+            'generated_outline': p.generated_outline,
             'created_at': p.created_at
         })
 
@@ -572,11 +575,12 @@ def get_history(current_user):
     outlines = StoryOutline.query.filter_by(user_id=current_user.id).all()
     for o in outlines:
         history_items.append({
-            'type': 'saved', # 更简洁的类型名
+            'type': 'saved',
             'id': o.id,
-            'characters': o.characters,
-            'core_scenes': o.core_scenes,
-            'outline': o.outline,
+            'character1': o.character1,
+            'character2': o.character2,
+            'core_prompt': o.core_prompt,
+            'generated_outline': o.generated_outline,
             'created_at': o.created_at
         })
 
