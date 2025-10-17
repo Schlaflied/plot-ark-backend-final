@@ -42,8 +42,8 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_recycle': 280, 'pool_pre_ping':
 
 # --- 限流器配置 ---
 limiter = Limiter(
-    app,
-    get_remote_address, # 将key_func作为第二个位置参数传递
+    app=app, # 明确指定app为关键字参数
+    key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour"], # 全局默认限流
     storage_uri="memory://", # 使用内存存储，注意Cloud Run多实例时的局限性
 )
