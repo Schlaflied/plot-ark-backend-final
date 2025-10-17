@@ -315,7 +315,7 @@ def register():
 
     try:
         hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
-        new_user = User(email=email, password_hash=hashed_password, is_verified=False, credits=0)
+        new_user = User(email=email, password_hash=hashed_password, is_verified=False, credits=3) # 注册时即赠送3点
         db.session.add(new_user)
         db.session.commit()
 
@@ -362,7 +362,7 @@ def verify_email_token(token):
         return redirect(url_for('verification_status', status='already_verified'))
 
     user.is_verified = True
-    user.credits = 3 # 激活赠送3点
+    # user.credits = 3 # 激活赠送3点 - 积分已在注册时赠送
     db.session.commit()
     return redirect(url_for('verification_status', status='success'))
 
