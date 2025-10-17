@@ -7,14 +7,11 @@
 # 2. 修正了 app.run 中 host 参数的致命拼写错误 ('0.logg.0' -> '0.0.0.0')。
 # 下一步的关键是在 Cloud Run 中设置"最小实例"为 1 来彻底解决冷启动超时问题。
 # -----------------------------------------------------------------------------
-import os
-import datetime
-import jwt
 import traceback
 from functools import wraps
 
 import google.generativeai as genai
-from flask import Flask, request, jsonify, url_for
+from flask import Flask, request, jsonify, url_for, redirect
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -22,6 +19,8 @@ from dotenv import load_dotenv
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadTimeSignature
 import sib_api_v3_sdk
 from sib_api_v3_sdk.rest import ApiException
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 # from flask_mail import Mail, Message
 
 
@@ -37,6 +36,14 @@ DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://user:password@host:p
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_recycle': 280, 'pool_pre_ping': True}
+
+# --- 限流器配置 ---
+limiter = Limiter(
+    app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"], # 全局默认限流
+    storage_uri="memory://", # 使用内存存储，注意Cloud Run多实例时的局限性
+)
 
 
 # --- 数据库与模型定义 ---
@@ -439,6 +446,7 @@ def login():
 
 
 @app.route('/api/generate', methods=['POST'])
+@limiter.limit("3 per day", error_message="每个IP每天只能生成3次大纲，请明天再试或注册/登录以获得更多点数。") # IP限流
 @token_required
 def generate_plot_outline_for_user(current_user):
     # ... (代码不变)

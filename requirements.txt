@@ -9,6 +9,7 @@ psycopg2-binary
 PyJWT
 itsdangerous
 sib-api-v3-sdk
+Flask-Limiter
 # 如果你需要实际发送邮件, 请取消下面一行的注释
 # Flask-Mail==0.9.1
 
