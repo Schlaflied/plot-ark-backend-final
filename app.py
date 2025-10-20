@@ -430,6 +430,7 @@ def verification_status():
     return html_content, 200
 
 
+
 @app.route('/api/login', methods=['POST'])
 def login():
     # ... (代码不变)
@@ -444,6 +445,9 @@ def login():
     if not user or not check_password_hash(user.password_hash, password):
         return make_error_response('invalid_credentials', '邮箱或密码错误', 401)
 
+    if not user.is_verified:
+        return make_error_response('email_not_verified', '您的邮箱尚未验证，请检查邮件激活账户。', 401)
+
     token = jwt.encode({'user_id': user.id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)},
                        app.config['SECRET_KEY'], algorithm="HS256")
 
@@ -456,6 +460,36 @@ def login():
         }
     })
 
+@app.route('/api/resend-verification-email', methods=['POST'])
+@limiter.limit("1 per minute", error_message="请勿频繁发送验证邮件，请稍后再试。") # 每分钟限流1次
+def resend_verification_email():
+    data = request.get_json()
+    email = data.get('email')
+    language = data.get('language', 'en') # 允许前端指定邮件语言
+
+    if not email:
+        return make_error_response('missing_email', '邮箱不能为空。', 400)
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return make_error_response('user_not_found', '找不到该邮箱对应的用户。', 404)
+
+    if user.is_verified:
+        return make_error_response('already_verified', '该邮箱已验证，无需重复发送。', 400)
+
+    try:
+        serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+        token = serializer.dumps(user.email, salt='email-confirm-salt')
+        
+        success, detail = send_verification_email(user.email, token, language)
+        if success:
+            return jsonify({'message': '验证邮件已重新发送，请检查您的邮箱。'}), 200
+        else:
+            return make_error_response('email_send_failed', f'重新发送验证邮件失败: {detail}', 500)
+    except Exception as e:
+        print(f"!!! /api/resend-verification-email 发生错误: {e} !!!")
+        print(traceback.format_exc())
+        return make_error_response('internal_server_error', '重新发送验证邮件时发生内部错误。', 500)
 
 @app.route('/api/generate', methods=['POST'])
 @limiter.limit("3 per day", error_message="每个IP每天只能生成3次大纲，请明天再试或注册/登录以获得更多点数。") # IP限流
